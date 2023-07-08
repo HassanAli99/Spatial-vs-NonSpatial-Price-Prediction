@@ -12,6 +12,6 @@ Airbnb is a prominent example of how the sharing economy and peer-to-peer activi
 This study concentrates on predicting the price of Airbnb listings in Amsterdam using two models: the Hedonic Price Model (HPM) and the Globally Weighted Regression (GWR) model. The HPM is a global model that determines the transactional price based on intrinsic attributes, whereas the GWR model takes into consideration local variation and spatial dependence.
 
 ## Repository Structure
-"-`source`: Contains the source code for data collection, preprocessing (implemented in Python), and model implementation (implemented in R)."
-- `data`: The dataset (both raw and pre-processed) can be found [here](https://doi.org/10.5281/zenodo.8126348).
+"- `source`: Contains the source code for data collection, preprocessing (implemented in Python), and model implementation (implemented in R)."
+"- `data`: The dataset (both raw and pre-processed) can be found [here](https://doi.org/10.5281/zenodo.8126348)."
 "- `paper`: Paper_Case Study of Airbnb Price predictions.pdf - This PDF file contains the full paper elaborating on the methods, results, and analysis and discussion of the study."
