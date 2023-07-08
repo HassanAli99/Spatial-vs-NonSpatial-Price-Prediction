@@ -13,5 +13,7 @@ This study concentrates on predicting the price of Airbnb listings in Amsterdam 
 
 ## Repository Structure
 "- `source`: Contains the source code for data collection, preprocessing (implemented in Python), and model implementation (implemented in R)."
+
 "- `data`: The dataset (both raw and pre-processed) can be found [here](https://doi.org/10.5281/zenodo.8126348)."
+
 "- `paper`: Paper_Case Study of Airbnb Price predictions.pdf - This PDF file contains the full paper elaborating on the methods, results, and analysis and discussion of the study."
