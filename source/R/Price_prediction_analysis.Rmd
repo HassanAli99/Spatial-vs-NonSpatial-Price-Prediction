@@ -1,0 +1,1014 @@
+---
+title: "A comparative Study of Spatial and Non-spatial modelling in price prediction"
+output: html_document
+authors: "Hassan Ali, Sahar Pourahmad, Wiktoria Libera"
+date: "2023-04-14"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1. Loading the packages
+
+Loading the packages might require some additional steps depending on their version of them as well as R itself. Where itis needed, we need to install an uninstall the packages in order to run the models (especially the GWR).  
+
+```{r, eval=FALSE}
+remove.packages("GWmodel")
+```
+
+
+```{r, eval=FALSE}
+#this step may require us to click "yes" a few times 
+install.packages("GWmodel", "2.2.8")
+```
+
+
+```{r}
+#sometimes this shows an error and then you have to restart it one more time and it shoud work 
+library(GWmodel)
+```
+
+
+```{r, eval=F}
+#loading packages:
+easypackages::packages ("sf", "sp", "spdep", "Matrix", "spatialreg", "spgwr", "geostan", "tmap", "mapview", "car", "RColorBrewer", "cowplot", "leafsync", "leaflet.extras2", "mapview", "lmtest", "tseries", "dplyr", "ggplot2", "tidyverse")
+```
+
+
+```{r, eval=FALSE}
+#some additional libraries as there were difficulties in the code 
+
+#install.packages("ISLR")
+#install.packages("glmnet")
+#install.packages("caret")
+
+#the following steps may require us to click "yes" multiple times
+
+#remove.packages("rlang")
+#install.packages("rlang", "1.1.0")
+
+#remove.packages("vctrs")
+#install.packages("vctrs", "0.6.0")
+remove.packages("tibble")
+install.packages("tibble", "3.2.1")
+
+```
+
+
+```{r}
+library(ISLR)
+library(ggplot2)
+library(glmnet)
+library(tidyverse)
+library(caret)
+library(stats)
+```
+
+
+# 2. Loading the data/ explorative analysis 
+
+```{r}
+#getting the data:
+full_data <- read.csv("listings_clean.csv")
+
+#check variable names
+names(full_data)
+```
+
+
+```{r}
+#showing the details of the data
+str(full_data)
+```
+
+A short explanation of each variable is available in the word document with the paper. 
+
+# 3. Pre-processing
+
+## 3.1 Dealing with missing values
+
+```{r}
+#get a copy of the full data
+df <- full_data
+```
+
+```{r}
+colSums(is.na(df))
+```
+
+Review_scores_rating has 642 missing values, and beds has 88. Review_scores_rating has lots of missing values, but as it can influence the price and it is 10% of data we can drop it:
+
+```{r}
+#dropping rows with missing value at review_scores_rating
+df <- subset(df, !is.na(review_scores_rating))
+```
+
+## 3.2 Dealing with outliers
+
+### 3.2.1 Checking all variables
+
+Here we look at some varibles to quickly check if they are normal:
+
+```{r}
+unique(df$neighbourhood_cleansed)
+```
+
+```{r}
+summary(df)
+```
+
+By looking at the results, "price" here is totally abnormal, so we need further investigation on this. This is done in section 3.2.2 .
+
+```{r}
+df_beds <- subset(df, df$beds > 10)
+df_beds
+```
+
+Variables "accommodates" and "beds" are not independent variables, so we should only include one of them. Variable accommodates is a better choice as "beds" has 74 missing values, and sometimes weird values compared to "accommodates".
+
+```{r}
+unique(df$property_type)
+```
+
+```{r}
+#making the dataframe with property types, before encoding them 
+p_types <- as.data.frame(table(df$property_type))
+p_types
+```
+
+As it can be seen in the table, lots of property types are only used in less than 5 rows. This can cause problem when dividing the data to train and test. This is handled in section x.
+
+
+### 3.2.2 Dealing with the price variable outliers
+
+If we look at price variable, we see that it has some extremely high prices that does not match the data:
+
+```{r}
+summary(df$price)
+```
+While the median is 175 and the mean is 228, maximum of 71536 is totally abnormal. This can also be seen when we plot the prices in boxplot:
+
+```{r}
+#plotting a box plot of price
+boxplot(df$price)
+```
+
+It is either a mistake or a rare case, in both cases the model will be influenced by this problem and we need to put this out. How do we choose the range of abnormality to put the data out?
+
+First we try the the statistical approach:
+```{r}
+q1 <- quantile(df$price, 0.25)
+q3 <- quantile(df$price, 0.75)
+iqr <- q3 - q1
+lower <- q1 - 1.5*iqr
+upper <- q3 + 1.5*iqr
+```
+
+```{r}
+paste0("lower=", lower, ", upper=", upper)
+```
+
+This is the statistical normal range for these prices, but we know that his is not necessarily mean we can use this range. As we are talking about the price of an accommodation in Amsterdam, it cannot be negative. Also, the price more than 439 might be not in the range, but it is possible. So let's look at the prices less than and more than a value and decide which ones to keep by domain knowledge:
+
+Let's look at the prices under 10 euros/night:
+```{r}
+df_low <- subset(df, df$price < 10)
+df_low
+```
+
+We can see we have two prices less than 10 and both are zeros, and if it is zero, it is probably a mistake. So we drop it:
+```{r}
+df<- subset(df, df$price > 0)
+```
+
+Now let's look at the accommodations with price more than 439
+```{r}
+df_439 <- subset(df, df$price > 1000)
+df_439
+```
+
+We can see there are 25 rows with higher price, mostly for property_type of entire loft or entire home. So this means they are not outliers.
+
+Now let's look at the accommodations with price more than 2000:
+```{r}
+df_2000 <- subset(df, df$price > 2000)
+df_2000
+```
+
+We can see we have four abnormal prices, which is probably a mistake. So we drop it:
+```{r}
+df<- subset(df, df$price < 2000)
+df
+```
+
+There are 6069 data points left. Now let's look at the distribution of the price:
+```{r}
+#plotting the box plot of price after adjustments
+boxplot(df$price)
+```
+It is more normal now!
+
+## 3.3 Encoding Categorical Variables
+
+We have two categorical variables, we need to encode them:
+```{r}
+#saving the names of the property types before encoding
+pp <- unique(df$property_type)
+```
+
+```{r}
+# saving the names of neighbourhoods before encoding
+nc <- unique(df$neighbourhood_cleansed)
+```
+
+
+```{r}
+df$property_type = factor(df$property_type, levels = pp, labels = seq(1,54))
+df$neighbourhood_cleansed = factor(df$neighbourhood_cleansed, levels = nc, labels = seq(1,22))
+```
+
+```{r}
+p_types <- as.data.frame(table(df$property_type))
+p_types
+```
+
+## 3.4 Feature Scaling
+
+
+```{r}
+#indicating what variables need to be scaled
+num_col <- c("price", "accommodates", "review_scores_rating", "restaurant" , "nightclub", "suppermarket" , "park" , "trainstation" , "busstop" , "bicycle_rental" , "city_center" , "culture_to" , "public_gre" , "Safety_ind")
+
+#scaling the variables
+df[ ,num_col] <- scale(df[ ,num_col])
+```
+
+
+# 4. Non-Spatial Modeling
+
+## 4.1 Simple Linear Regression
+
+We have 3 kinds of variables: 
+1. accommodation variables: neighbourhood_cleansed + property_type + accommodates + review_scores_rating
+2. distance variables: restaurant + nightclub + suppermarket + park + trainstation + busstop + bicycle_rental + city_center
+3. neighborhood variables: culture_to + public_gre + Safety_ind
+
+equation 1
+
+```{r}
+#model with all 3 kinds of variables: accommodation variables + distance variables + neighborhood variables
+equation_1 <- price ~ neighbourhood_cleansed + property_type + accommodates + review_scores_rating + restaurant + nightclub + suppermarket + park + trainstation + busstop + bicycle_rental + city_center + culture_to + public_gre + Safety_ind
+```
+
+```{r}
+linear_model_1 <- lm(equation_1, data = df)
+```
+
+```{r}
+summary(linear_model_1)$r.squared
+```
+```{r}
+AIC(linear_model_1)
+```
+equation 2
+
+```{r}
+#model with only accommodation variables
+equation_2 <- price ~ neighbourhood_cleansed + property_type + accommodates + review_scores_rating 
+```
+
+```{r}
+linear_model_2 <- lm(equation_2, data = df)
+```
+
+```{r}
+summary(linear_model_2)$r.squared
+```
+
+```{r}
+AIC(linear_model_2)
+```
+equation 3
+
+```{r}
+#model with accommodation variables + neighborhood variables
+equation_3 <- price ~ neighbourhood_cleansed + property_type + accommodates + review_scores_rating + culture_to + public_gre + Safety_ind
+```
+
+
+```{r}
+linear_model_3 <- lm(equation_3, data = df)
+```
+
+```{r}
+summary(linear_model_3)$r.squared
+```
+
+equation 4
+
+```{r}
+#model with accommodation variables + only distance to city center
+equation_4 <- price ~ neighbourhood_cleansed + property_type + accommodates + review_scores_rating + city_center 
+```
+
+
+```{r}
+linear_model_4 <- lm(equation_4, data = df)
+```
+
+```{r}
+summary(linear_model_4)$r.squared
+```
+equation 5
+
+```{r}
+#model with accommodation variables + distance variables
+equation_5 <- price ~ neighbourhood_cleansed + accommodates + review_scores_rating + restaurant + nightclub + suppermarket + park + trainstation + busstop + bicycle_rental 
+```
+
+
+```{r}
+linear_model_5 <- lm(equation_5, data = df)
+```
+
+```{r}
+summary(linear_model_5)$r.squared
+```
+As it can be seen, the equation 1 has the best r squared!
+
+## 4.2 Lasso
+
+In the previous section, we calculated some combination of variables but the one with all the variables gave us the best results. We can try Lasso to see if it gives us a better R squared, or if we can shrink some variables to do a feature selection.
+
+Dividing to train and test set:
+
+```{r}
+#set.seed(100)
+# define the training partition 
+train_index <- createDataPartition(df$price, p = .80, list = FALSE, times = 1)
+
+# split the data using the training partition to obtain training data
+df_train <- df[train_index,]
+df_test  <- df[-train_index,]
+
+# Outcome of this section is that the data (100%) is split into:
+# training (~80%)
+# test (~20%)
+```
+
+
+#### Matching levels between train and test dataset for categorical variables
+
+As we mentioned in section x, dividing the data to test and train dataset can result in mismatch between categorial variable levels, specially in the levels that are not very popular. We need to test this in the two categorical variables we have:
+
+#### Variable : property_type
+
+```{r}
+p_count_train <- length(as.numeric(unique(df_train$property_type)))
+p_count_train
+```
+
+```{r}
+p_count_test <- length(as.numeric(unique(df_test$property_type)))
+p_count_test
+```
+
+As it can be seen, the levels are different. 
+
+#### removing the rows in df_test with the levels that are not in train set
+
+```{r}
+#checking the row numbers of test data
+nrow(df_test)
+```
+
+```{r}
+#creating a table of different values of df_train
+p_train <- data.frame(table(df_train$property_type))
+
+#detect the property_types that are 0 in p_train, putting them in a list named detected
+detected <- vector()
+for (i in 1:54){
+  if (p_train$Freq[i] == 0)
+    {detected <- append((as.numeric(p_train$Var1[i])), detected)}
+}
+```
+
+```{r}
+detected_from_train <- detected 
+detected_from_train
+```
+
+```{r}
+#removing the detected ones in df_test as well
+df_test <- subset(df_test, !(df_test$property_type %in% detected))
+```
+
+```{r}
+#checking the number of row to see how many has been removed
+nrow(df_test)
+```
+
+#### removing the rows in df_train with the levels that are not in test set
+
+```{r}
+#checkin the row numbers of test data
+nrow(df_train)
+```
+
+```{r}
+#creating a table of different values of df_test
+p_test <- data.frame(table(df_test$property_type))
+
+#detect the property_types that are 0 in p_test, putting them in a list named detected
+detected <- vector()
+for (i in 1:54){
+  if (p_test$Freq[i] == 0)
+    {detected <- append((as.numeric(p_test$Var1[i])), detected)}
+}
+```
+
+
+```{r}
+detected_from_test <- detected 
+detected_from_test
+```
+
+```{r}
+#removing the detected ones in df_train as well
+df_train <- subset(df_train, !(df_train$property_type %in% detected))
+```
+
+```{r}
+#checking the number of row to see how many has been removed
+nrow(df_train)
+```
+
+checking to see if we have same levels now:
+
+```{r}
+p_count_train <- length(as.numeric(unique(df_train$property_type)))
+p_count_train
+```
+```{r}
+p_count_test <- length(as.numeric(unique(df_test$property_type)))
+p_count_test
+```
+They are similar, so we can move on!
+
+
+#### Variable : neighbourhood_cleansed
+
+```{r}
+n_count_train <- length(as.numeric(unique(df_train$neighbourhood_cleansed)))
+n_count_train
+```
+
+```{r}
+n_count_test <- length(as.numeric(unique(df_test$neighbourhood_cleansed)))
+n_count_test
+```
+
+They are similar, so we can move on!
+
+#### calculate lmse for lm: equation_1
+
+```{r}
+#getting the y-true values
+y_true <- df_test$price
+```
+
+```{r}
+#predicting the results with simple linear regression for test set
+model <- lm(formula = equation_1, data= df_train)
+y_pred <- predict(model, newdata = df_test)
+mean((y_true - y_pred)^2)
+```
+
+We are using all the available variables and using the LASSO penalty to perform subset selection. For this, we first need to generate an input matrix.
+
+```{r}
+x_train <- model.matrix(equation_1, data = df_train)
+```
+
+The `model.matrix()` function takes a dataset and a formula and outputs the predictor matrix where the categorical variables have been correctly transformed into dummy variables, and it adds an intercept. It is used internally by the `lm()` function as well.
+
+```{r}
+x_vars <- x_train[, -1]
+y_var <- df_train$price
+
+#alpha=1 is the lasso penalty, and alpha=0 the ridge penalty.
+#getting the best lambda with cross validation
+result_cv <- cv.glmnet(x = x_vars, y = y_var, alpha=1, nfolds = 10)
+best_lambda <- result_cv$lambda.min
+best_lambda
+```
+
+```{r}
+#put the best lambda in the model
+lasso_model <- glmnet(x= x_vars,            # X matrix without intercept
+                 y= y_var,                  # price as response
+                 family = "gaussian",       # Normally distributed errors
+                 alpha= 1,                  # LASSO penalty
+                 lambda= best_lambda)       # Penalty value
+lasso_model
+```
+
+```{r}
+#getting the y-true values
+y_true <- df_test$price
+```
+
+```{r}
+#predicting the results with lasso model for test set
+x_test <- model.matrix(equation_1, data = df_test)
+x_test <- x_test[, -1]
+y_pred <- predict(lasso_model, s = best_lambda, newx= x_test)
+mean((y_true - y_pred)^2)
+```
+
+The RMSE did not change so much compared to lm. So this is not a better model!
+
+```{r}
+#Let's see which variables are shrinked
+coef(lasso_model)
+```
+
+
+```{r}
+rownames(coef(lasso_model))[which(coef(lasso_model) == 0)]
+```
+Only some property types that are not very popular need to be shrieked. This is not relevant, as these are not different variables, and we are going to keep the whole property type variable in the equation.
+
+## 4.3 Lasso for feature selection
+
+Lasso did not give us bettwer result, but let's see if using lasso in whole dataset can help shrinking some variables for us:
+
+```{r}
+#recalling variables in equation 1
+equation_1 <- price ~ neighbourhood_cleansed + property_type + accommodates + review_scores_rating + restaurant + nightclub + suppermarket + park + trainstation + busstop + bicycle_rental + city_center + culture_to + public_gre + Safety_ind
+```
+
+```{r}
+#Making the data ready to feed to Lasso
+num_col <- c("neighbourhood_cleansed", "property_type",  "accommodates", "review_scores_rating", "restaurant" , "nightclub", "suppermarket" , "park" , "trainstation" , "busstop" , "bicycle_rental" , "city_center" , "culture_to" , "public_gre" , "Safety_ind", "price")
+
+df_lasso <- (df[ ,num_col])
+
+x_vars <- model.matrix(equation_1, data = df_lasso)
+x_vars <- x_vars[, -1]
+y_var <- df_lasso$price
+
+#alpha=1 is the lasso penalty, and alpha=0 the ridge penalty.
+result_cv <- cv.glmnet(x = x_vars, y = y_var, alpha=1, nfolds = 10)
+best_lambda <- result_cv$lambda.min
+best_lambda
+```
+```{r}
+#putting the data in lasso with best lambda
+lasso_model <- glmnet(x= x_vars,            # X matrix without intercept
+                 y= y_var,                  # price as response
+                 family = "gaussian",       # Normally distributed errors
+                 alpha= 1,                  # LASSO penalty
+                 lambda= best_lambda)       # Penalty value
+lasso_model
+```
+```{r}
+rownames(coef(lasso_model))[which(coef(lasso_model) == 0)]
+```
+Again, property types that are not very popular need to be shrieked. This is not relevant, as these are not different variables, and we are going to keep the whole property type variable in the equation.
+
+```{r}
+coef(lasso_model)
+```
+
+## 4.4 Checking the assumptions of linear regression model
+Since we discovered that the best equation is to have equation 1, and it is regression we need to check for the assumptions of the model, and if they are fulfilled or not. To do so we use the standard methods in R, that is the graphs and Variance Inflation Factor (VIF) to determine multicolinarity.   
+
+```{r}
+#plotting all the graphs together 
+par(mfrow = c(2, 2))
+plot(linear_model_1)
+```
+
+Even though we have all the graphs together it might be necessary to have a closer look to see it better. 
+
+```{r}
+#checking the linearity 
+plot(linear_model_1, 1)
+```
+
+Linearity does not seem to be perfect. Even though the line is close to 0, the points seem to be more clustered in one place rather than equally distributed on the line. That also indicates the heterogenity.
+
+```{r}
+#checking the heterogeneity of variance
+plot(linear_model_1, 3)
+```
+
+This plot further proves that there is a problem as the variance between the residuals is not equal, especially in the end. Small fitted values is much smaller than for high fitted values, that is why the points fo not follow the red line to the left of the line. 
+
+```{r}
+#checking the normality for residuals 
+plot(linear_model_1, 2)
+```
+
+```{r}
+#checking for outliers 
+plot(linear_model_1, 5)
+```
+
+
+```{r}
+#checking for multicolinearity using the VIF 
+library("olsrr")
+ols_vif_tol(linear_model_1)
+```
+
+```{r}
+#checking the overall performance of the model and the significance of the predictors
+summary(linear_model_1)
+```
+
+The detail analysis of the results is presennted in the paper. On the first glance we can see that the R-squared is not satisfactory (37%) and there are only a few factors that are statistially significant (p-value <0.05)
+
+### Additional part to get the results into tables
+
+In order to prestent the results of the regression in the word documet we use the libraries ['gtsummary'](https://www.danieldsjoberg.com/gtsummary/) and ['flextable'](https://ardata-fr.github.io/flextable-book/) that allowed us to export the summary in a form of the table into a word document. Unfortnatley, that was not possible for the GWR. This section follows step by step, included the instalation but the cells are set to FALSE, so they do not run if not needed. 
+
+```{r, eval=FALSE}
+#install.packages("gtsummary")
+#library(gtsummary)
+#install.packages("flextable")
+#library("flextable")
+
+#saving the table with the 
+t1<- tbl_regression(linear_model_1)
+
+t1 %>%
+  as_flex_table() %>%
+  flextable::save_as_docx(path="/full_summary_HPM.docx") #this is a way to save the table into the word file
+
+# saving the table for only part of the summary (the significant variables)
+t2<- tbl_regression(linear_model_1, include = c("accommodates", "review_scores_rating",
+                                           "restaurant", "nightclub", "suppermarket",
+                                           "park", "trainstation", "busstop",
+                                           "bicycle_rental", "city_center",
+                                           "culture_to", "public_gre", "Safety_ind"),
+                    add_estimate_to_reference_rows=TRUE)
+t2 %>%
+  as_flex_table() %>%
+  flextable::save_as_docx(path="/table_part_regression.docx")
+```
+
+
+# 5. Spatial Modeling
+
+First of all we need to  evaluate the spatial autocorrelation: detecting global and local dependency with global Moran’s I and local Moran’s I test.
+
+## 5.1 Changing the dataframe to a spatial object
+
+```{r}
+# Note: crs= 4326 parameter assigns a WGS84 coordinate system to the spatial object
+sdf <- st_as_sf(df, coords = c("longitude", "latitude"), crs = 4326) 
+```
+
+## 5.2 Testing for autocorreleation:
+
+### 5.2.1 Global Moran’s I: k-nearest neighbor based W matrix
+
+We need the spatial weight matrix/ W matrix. Several ways to do that: contiguity/adjacency, k nearest neighbor, distance.
+
+note: here we have points, not polygons. So adjacency based method cannot be used, but distance based and k nearest neighbors can be used.
+
+k-nearest neighbor based W matrix:
+
+```{r}
+#we convert points data to centroid
+coordsW <- sdf%>%
+  st_centroid()%>%
+  st_geometry()
+```
+
+```{r}
+#Now we can use these centroid with KNN function to create a weight matrix 
+# lets take the 3 nearest neighbors 
+sdf_KNN <- knearneigh(coordsW, k=3)
+```
+
+```{r}
+sdf_nbq_KNN <- knn2nb(sdf_KNN, sym=T)
+summary(sdf_nbq_KNN)
+```
+
+
+```{r}
+#creating the w matrix
+sdf_KNN_w <- nb2listw(sdf_nbq_KNN, style="W", zero.policy = TRUE)
+
+#let us see the adjacency matrix created by KNN5
+plot(sdf_KNN_w, st_geometry(coordsW), col="red")
+```
+
+Now we get to checking the autocorrelation using Moran’s I using Monte Carlo with this W matrix:
+
+```{r}
+#x: a numeric vector the same length as the neighbours list in listw
+#listw: a listw object created for example by nb2listw
+#nsim: number of permutations
+#alternative: a character string specifying the alternative hypothesis, must be one of "greater" (default), "two.sided", or "less".
+mc_global_knn <- moran.mc(x = sdf$price, listw = sdf_KNN_w, nsim = 2999, alternative="greater")
+```
+
+```{r}
+#plot the  Moran’s I
+plot(mc_global_knn)
+```
+
+```{r}
+mc_global_knn
+```
+The p-value is less than 0.05, so we reject the null hypothesis that there is no significant autocorrelations in the variable, thus the variable has spatial clustering and we need to do spatial modeling.
+
+
+### 5.2.2 Local Spatial pattern analysis Moran’s I 
+
+The global method does not show where or which neighbors are in a cluster, so we do the local autocorrelation analysis to investigate the local autocorrelation, by Local indicators of spatial association (LISA) approach by Anselin.
+
+```{r}
+# calculate the local Moran's I
+sdf_LISA <- localmoran(sdf$price, sdf_KNN_w)  #using knn based 
+summary(sdf_LISA)
+```
+What this shows to us:
+Ii = local moran statistic
+E.Ii = expectation of local moran statistic
+Var.Ii= variance of local moran statistic
+Z.Ii= standard deviate of local moran statistic
+Pr(z > 0) p-value of local moran statistic
+
+```{r}
+# extract local Moran's I values and attache them to our sf object 
+sdf$sdf_LISA <- sdf_LISA[,1] 
+# extract p-values
+sdf$sdf_LISA_p <- sdf_LISA[,5] 
+```
+
+```{r, eval=FALSE}
+#package for the map
+install.packages("ggmap")
+```
+
+```{r}
+#creating varibles to use the shp file as a bacground to the maps
+amsterdam_neighborhoods <- st_read("Neighbourhoods.shp")
+
+#Here we can map the local Moran's I with t-map, and show which areas have significant clusters
+map_LISA <- tm_shape(amsterdam_neighborhoods) +
+  tm_polygons() +
+  tm_shape(sdf) + 
+  tm_dots(col= "sdf_LISA", title= "Local Moran’s I", midpoint=0,
+          palette = "Dark2", breaks= c(-10, -5, 0, 5, 10, 20),
+          size = 0.05) 
+map_LISA
+```
+
+
+
+```{r}
+map_LISA_p <- tm_shape(amsterdam_neighborhoods) +
+  tm_polygons() +
+  tm_shape(sdf) + 
+  tm_dots(col = "sdf_LISA", title= "p-values",
+          breaks= c(0, 0.01, 0.05, 1),
+          palette = "Set1",
+          size = 0.06) 
+map_LISA_p
+```
+
+We can see a few significant spatial clusters and mostly in the center.
+
+Another visualization to see High-High local, Low-Low local, High-Low local and Low-High local better:
+
+```{r}
+# 95% confidence, define what level of significance we will accept for a cluster to be statistically significant
+significanceLevel <- 0.05; 
+#take the mean value of the variable under consideration
+meanVal <- mean(sdf$price);
+#we create a new object to make sure previous reults is available to us
+sdf_LISA_type <- sdf_LISA 
+
+#create an object storing the LISA values into different classes of significance
+sdf_LISA_mapping <- sdf_LISA_type %>% tibble::as_tibble() %>%
+  magrittr::set_colnames(c("Ii","E.Ii","Var.Ii","Z.Ii","Pr(z > 0)")) %>%
+  dplyr::mutate(coType = dplyr::case_when(
+  `Pr(z > 0)` > 0.05 ~ "Insignificant", #greater than 0.05, thus Insignificant 
+  `Pr(z > 0)` <= 0.05 & Ii >= 0 & sdf$price >= meanVal ~ "HH", #High-High local Moran's I values
+  `Pr(z > 0)` <= 0.05 & Ii >= 0 & sdf$price < meanVal ~ "LL", #Low-Low local Moran's I values
+  `Pr(z > 0)` <= 0.05 & Ii < 0 & sdf$price >= meanVal ~ "HL", #High-Low local Moran's I values
+  `Pr(z > 0)` <= 0.05 & Ii < 0 & sdf$price < meanVal ~ "LH" #Low-High local Moran's I values
+))
+
+#Join back to the main polygon data
+sdf$coType <- sdf_LISA_mapping$coType %>% tidyr::replace_na("Insignificant")
+
+# Load the shapefile of Amsterdam neighborhoods
+amsterdam_neighborhoods <- st_read("Neighbourhoods.shp")
+
+# Convert the neighborhoods to sf object
+amsterdam_neighborhoods_sf <- st_as_sf(amsterdam_neighborhoods)
+
+# Plot the clusters and outliers with the Amsterdam neighborhoods
+ggplot() +
+  geom_sf(data = amsterdam_neighborhoods_sf, fill = "transparent", color = "black") +
+  geom_sf(data = sdf, aes(color=coType), size = 1) +
+  scale_color_manual(values = c('orange','brown','yellow','cyan'), name='Clusters & \nOutliers') +
+  labs(title = "Price clusters") +
+  theme(panel.background = element_rect(fill='transparent'))
+```
+
+
+```{r}
+summary(linear_model_1)
+```
+
+note: we need to add OSM of Amsterdam to locate this.
+
+## 5.3 Fitting GWR model
+
+GWR overcomes issue of spatial nonstationarity by allowing modeled relationships between a dependent variable and a set of predictors varying over space. 
+
+
+```{r}
+# Note: crs= 4326 parameter assigns a WGS84 coordinate system to the spatial object
+sdf <- st_as_sf(df, coords = c("longitude", "latitude"), crs = 4326) 
+```
+
+```{r}
+#subset the code so it does not take long to run
+#sdf <- sdf[sample(nrow(sdf), 100), ]
+```
+
+```{r}
+sdf_sp <- as_Spatial(sdf)
+```
+
+
+## 5.3.1 Adaptive Kernel GWR
+
+Finding the adaptive kernel using Gaussian function:
+
+```{r}
+#approach: specified by CV for cross-validation approach or by AIC corrected (AICc), we used AIC 
+#kernel: this can be different function e.g., bisquare,exponential, depend on the prior understanding or choice of the modeler
+#this code takes too much to run so it is hashtaged
+
+#abw <- bw.gwr(equation_1,
+#             approach = "AIC", 
+#             adaptive = TRUE,
+#             kernel="gaussian",
+#             data=sdf_sp) 
+```
+
+The above code chunk takes too much to run, so this is the results:
+number of neighbors = 215 AIC= 13682.55 R2= 0.4868242 Adjusted R2= 0.4239386
+
+```{r}
+#results from previous code chunk
+abw = 215
+```
+
+Fitting the model with gwr.basic function:
+
+```{r}
+#bw: adaptive bandwidth (number of nearest neighbours)
+#adaptive: if TRUE calculate an adaptive kernel where the bandwidth (bw) corresponds to the number of nearest neighbours (i.e. adaptive distance)
+
+a.gwr <- gwr.basic(equation_1,
+             adaptive = TRUE,
+             kernel="gaussian", 
+             bw = abw, 
+             data=sdf_sp) 
+
+```
+
+
+```{r}
+a.gwr
+```
+
+```{r}
+cat("number of neighbors =", abw, "AIC=", a.gwr$GW.diagnostic$AIC, "R2=", a.gwr$GW.diagnostic$gw.R2, "Adjusted R2=",  a.gwr$GW.diagnostic$gwR2.adj)
+```
+
+Here the model optimization finds the best number of nearest neighbors: 215. This means in our data set, for the given equation, the lowest AIC could be achieved with data from nearest 215 observations and the model use data from the nearest 215 neighbors to compute each local weighted regression. We use this number to fit the model.
+
+
+## 5.3.2 Fixed Kernel GWR: AIC approach
+
+```{r}
+#find the optimum bandwidth distance for fixed kernel using the bw.gwr() function from GWmodel package
+#this code takes too much to run so it is hashtaged
+#fda <- bw.gwr(equation_1,
+#             approach = "AIC",
+#             adaptive = FALSE,
+#             kernel="gaussian",
+#             data = sdf_sp) 
+```
+
+The above code chunk takes too much to run, so this is the results:
+number of neighbors = 215 AIC= 13682.55 R2= 0.4868242 Adjusted R2= 0.4239386
+
+```{r}
+#results from previous code chunk
+fda = 0.03116446
+```
+
+
+```{r}
+#fitting the model with gwr.basic function
+#bw: give the optimal bandwidth we found in the last stage
+f.gwr <- gwr.basic(equation_1,
+             adaptive = FALSE,
+             kernel="gaussian", 
+             bw = fda, 
+             data=sdf_sp) 
+f.gwr
+```
+
+```{r}
+cat("bandwidth =", fda, "AIC=", f.gwr$GW.diagnostic$AIC, "R2=", f.gwr$GW.diagnostic$gw.R2, "Adjusted R2=",  f.gwr$GW.diagnostic$gwR2.adj)
+```
+
+## 5.3.3 Visualisating the results
+
+Since we established that the adaptive kernel is better, it is nice to visualize some of the variables that are used for GWR. The variables were chosen based on the significance for the global regression:
+
+```{r}
+names(a.gwr)
+```
+
+```{r}
+#get the SDF out of model object as an sf object using st_as_sf function
+agwr_sf = st_as_sf(a.gwr$SDF)
+```
+
+
+```{r}
+library(tmap)
+library(tmaptools)
+
+# load Amsterdam neighborhood shapefile in order to get the background map of Amsterdam 
+amsterdam_nb <- read_sf("Neighbourhoods.shp")
+
+
+#visualization of all the significant varibles, excluding the categorical ones 
+agwrM1 <- tm_shape(amsterdam_nb) +
+  tm_borders(lwd = 0.5, col = "gray") +
+  tm_shape(agwr_sf) +
+  tm_dots("city_center", palette = "RdBu", alpha = 0.5, size = 0.06) +
+  tm_layout(legend.outside = TRUE, legend.bg.color = "white", legend.frame = TRUE)
+  
+agwrM2 <-tm_shape(amsterdam_nb) +
+  tm_borders(lwd = 0.5, col = "gray") +
+  tm_shape(agwr_sf) +
+  tm_dots("accommodates", palette = "RdBu", alpha = 0.5, size = 0.06) +
+  tm_layout(legend.outside = TRUE, legend.bg.color = "white", legend.frame = TRUE)
+
+agwrM3 <-tm_shape(amsterdam_nb) +
+  tm_borders(lwd = 0.5, col = "gray") +
+  tm_shape(agwr_sf) +
+  tm_dots("review_scores_rating", palette = "RdBu", alpha = 0.5, size = 0.06) +
+  tm_layout(legend.outside = TRUE, legend.bg.color = "white", legend.frame = TRUE)
+
+agwrM4 <-tm_shape(amsterdam_nb) +
+  tm_borders(lwd = 0.5, col = "gray") +
+  tm_shape(agwr_sf) +
+  tm_dots("Safety_ind", palette = "RdBu", alpha = 0.5, size = 0.06) +
+  tm_layout(legend.outside = TRUE, legend.bg.color = "white", legend.frame = TRUE)
+
+agwrM5 <-tm_shape(amsterdam_nb) +
+  tm_borders(lwd = 0.5, col = "gray") +
+  tm_shape(agwr_sf) +
+  tm_dots("trainstation", palette = "RdBu", alpha = 0.5, size = 0.06) +
+  tm_layout(legend.outside = TRUE, legend.bg.color = "white", legend.frame = TRUE)
+
+#visualisation of R_local 
+agwrRrsq  <-tm_shape(amsterdam_nb) +
+  tm_borders(lwd = 0.5, col = "gray") +
+  tm_shape(agwr_sf) +
+  tm_dots("Local_R2", palette = "RdBu", alpha = 0.5, size = 0.06) +
+  tm_layout(legend.outside = TRUE,legend.bg.color = "white", legend.frame = TRUE)
+
+
+#plottinig all the variables and R_local together 
+tmap_arrange(agwrM1, agwrM2, agwrM3, agwrM4, agwrM5, agwrRrsq, asp = 1, ncol = 2)
+
+```
+
+```{r}
+#displaying only the local R-squared
+agwrRrsq
+```
+
+
